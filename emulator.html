@@ -3,10 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPU Emulator - VRAM Test</title>
+    <title>CPU Emulator</title>
     <link rel="stylesheet" href="css/emulator-style.css">
 </head>
 <body>
+    <div id="program-selection">
+        <label for="program-select">Select Program:</label>
+        <select id="program-select">
+            <option value="">Loading...</option>
+        </select>
+    </div>
     <div id="controls">
         <button id="reset-button">Reset</button>
         <button id="step-button">Step</button>

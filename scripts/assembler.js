@@ -37,7 +37,7 @@ try {
 
     // --- Pass 2 ---
     console.log("--- Starting Pass 2 ---");
-    const { outputBytes, errors: pass2Errors } = runPass2(pass1Lines, labels, constants);
+    const { machineCode, errors: pass2Errors } = runPass2(pass1Lines, labels, constants);
 
      if (pass2Errors.length > 0) {
         console.error("Errors found during Pass 2:");
@@ -49,23 +49,27 @@ try {
 
     // --- Write Output File ---
     console.log(`Writing output file: ${outputFile}`);
-    let maxAddress = 0;
-    if (outputBytes.size > 0) {
-        maxAddress = Math.max(...outputBytes.keys());
-    }
-    const fileSize = maxAddress + 1; // Size up to the last byte written
-    const outputBuffer = new Uint8Array(fileSize).fill(0); // Initialize with 0s
-
-    for (const [address, byteValue] of outputBytes.entries()) {
-        if (address >= fileSize) {
-             console.error(`Internal Error: Attempted to write byte 0x${byteValue.toString(16)} to address 0x${address.toString(16)} which is beyond calculated file size ${fileSize}`);
-             continue; // Should not happen if Pass 1 is correct
+    try {
+        // Check if machineCode exists and has content
+        if (machineCode && machineCode.length > 0) {
+            const outputSize = machineCode.length; // Use .length
+            fs.writeFileSync(outputFile, machineCode); // Write the Uint8Array
+            console.log(`Writing output file: ${outputFile}`);
+            console.log(`Output size: ${outputSize} bytes`);
+        } else if (machineCode) { // machineCode exists but is empty
+             console.log("Assembly successful, but no machine code generated (output is empty).");
+             // Optionally write an empty file if desired
+             // fs.writeFileSync(outputFile, machineCode);
+        } else {
+            // This case means runPass2 returned undefined/null for machineCode
+            console.error("Assembly finished, but no machine code data was available to write.");
+            process.exit(1);
         }
-        outputBuffer[address] = byteValue;
+    } catch (error) {
+        console.error(`Error writing output file: ${error.message}`);
+        console.error(error);
+        process.exit(1);
     }
-
-    fs.writeFileSync(outputFile, outputBuffer);
-    console.log(`Assembly successful. Output written to ${outputFile} (${outputBuffer.length} bytes).`);
 
 } catch (error) {
     console.error(`Assembler failed: ${error.message}`);

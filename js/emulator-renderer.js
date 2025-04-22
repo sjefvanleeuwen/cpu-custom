@@ -14,6 +14,7 @@ const stepButton = document.getElementById('step-button');
 const runButton = document.getElementById('run-button');
 const stopButton = document.getElementById('stop-button');
 const statusInfo = document.getElementById('status-info');
+const programSelect = document.getElementById('program-select'); // New element
 
 // --- Screen Configuration ---
 const SCREEN_CHAR_WIDTH = 40;
@@ -35,6 +36,8 @@ let loadedFontRomData = null;
 
 // --- Program Data ---
 let loadedProgramData = null; // Will hold the loaded .sys file
+let availablePrograms = []; // To store the list from programs.json
+let selectedProgramPath = null; // Store the path of the selected program
 
 // --- CPU Instance ---
 let cpu = new CPU();
@@ -74,21 +77,71 @@ async function loadFontRom() {
 }
 
 /**
- * Fetches and loads the program data from the .sys file.
+ * Fetches and loads the program list from programs.json.
+ */
+async function loadProgramList() {
+    try {
+        const response = await fetch('dist/programs.json');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        availablePrograms = await response.json();
+        console.log("Available programs loaded:", availablePrograms);
+    } catch (error) {
+        console.error('Error loading program list:', error);
+        programSelect.innerHTML = '<option value="">Error loading list</option>';
+        availablePrograms = []; // Ensure it's an empty array on error
+    }
+}
+
+/**
+ * Populates the program selector dropdown.
+ */
+function populateProgramSelector() {
+    programSelect.innerHTML = ''; // Clear existing options
+    if (availablePrograms.length === 0) {
+        programSelect.innerHTML = '<option value="">No programs found</option>';
+        return;
+    }
+
+    availablePrograms.forEach((program, index) => {
+        const option = document.createElement('option');
+        option.value = program.path;
+        option.textContent = program.name;
+        programSelect.appendChild(option);
+        // Select the first program by default
+        if (index === 0) {
+            option.selected = true;
+            selectedProgramPath = program.path;
+        }
+    });
+}
+
+/**
+ * Fetches and loads the program data from the specified .sys file path.
+ * @param {string} filePath The path to the .sys file to load.
  * @returns {Promise<Uint8Array>} A promise that resolves with the program data.
  */
-async function loadProgramSys() {
+async function loadProgramSys(filePath) {
+    if (!filePath) {
+        console.error("No program file path specified.");
+        statusInfo.textContent = "Status: Error - No program selected!";
+        loadedProgramData = null; // Ensure no stale data
+        return null; // Indicate failure
+    }
+    statusInfo.textContent = `Status: Loading ${filePath}...`;
     try {
-        const response = await fetch('dist/hello.sys'); // Load the assembled file
+        const response = await fetch(filePath); // Load the selected file
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const arrayBuffer = await response.arrayBuffer();
         loadedProgramData = new Uint8Array(arrayBuffer);
-        console.log(`Program loaded from dist/hello.sys (${loadedProgramData.length} bytes).`);
+        console.log(`Program loaded from ${filePath} (${loadedProgramData.length} bytes).`);
+        statusInfo.textContent = `Status: Loaded ${filePath}`;
         return loadedProgramData;
     } catch (error) {
-        console.error('Error loading program file:', error);
+        console.error(`Error loading program file (${filePath}):`, error);
         // Display error on canvas
         ctx.fillStyle = 'red';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -96,7 +149,9 @@ async function loadProgramSys() {
         ctx.fillStyle = 'white';
         ctx.textAlign = 'center';
         ctx.fillText('Error loading program!', canvas.width / 2, canvas.height / 2);
-        throw error;
+        statusInfo.textContent = `Status: Error loading ${filePath}!`;
+        loadedProgramData = null; // Ensure no stale data
+        throw error; // Re-throw for initialize function to catch
     }
 }
 
@@ -171,26 +226,36 @@ function resizeCanvas() {
 }
 
 // --- CPU Control Functions ---
-function resetEmulator() {
+async function resetEmulator() { // Make reset async to handle loading
     stopEmulator();
     cpu.reset(); // Resets CPU registers, memory, and loads Font ROM
 
-    if (!loadedProgramData) {
-        console.error("Program data not loaded. Cannot reset.");
-        statusInfo.textContent = "Status: Error - Program not loaded!";
-        return;
+    // Get the currently selected program path
+    selectedProgramPath = programSelect.value;
+
+    try {
+        // Load the selected program
+        await loadProgramSys(selectedProgramPath);
+
+        if (!loadedProgramData) {
+            console.error("Program data not loaded after attempt. Cannot reset.");
+            statusInfo.textContent = "Status: Error - Program failed to load!";
+            return;
+        }
+
+        // Load the assembled program into memory
+        cpu.memory.loadProgram(loadedProgramData, 0x0000);
+        cpu.registers.PC = 0x0000; // Set PC to program entry point
+
+        renderVRAM(); // Render initial VRAM
+        statusInfo.textContent = `Status: Reset - ${selectedProgramPath} loaded`;
+        console.log(`Emulator Reset with loaded program: ${selectedProgramPath}`);
+
+    } catch (error) {
+        // Error already logged by loadProgramSys
+        // Status already set by loadProgramSys
+        console.error("Reset failed due to program loading error.");
     }
-
-    // Load the entire assembled program/data blob into memory starting at 0x0000
-    // The .ORG directives in the assembly determined the correct addresses within the blob.
-    cpu.memory.loadProgram(loadedProgramData, 0x0000);
-
-    // Set PC to the program's entry point (defined by .ORG $0000 in the asm)
-    cpu.registers.PC = 0x0000;
-
-    renderVRAM(); // Render initial VRAM
-    statusInfo.textContent = "Status: Reset";
-    console.log("Emulator Reset with loaded hello.sys program.");
 }
 
 function stepEmulator() {
@@ -231,6 +296,11 @@ function stopEmulator() {
 }
 
 // --- Event Listeners ---
+programSelect.addEventListener('change', (event) => {
+    selectedProgramPath = event.target.value;
+    console.log(`Program selection changed to: ${selectedProgramPath}`);
+    resetEmulator(); // Reset and load the new program when selection changes
+});
 resetButton.addEventListener('click', resetEmulator);
 stepButton.addEventListener('click', stepEmulator);
 runButton.addEventListener('click', runEmulator);
@@ -241,22 +311,30 @@ window.addEventListener('resize', resizeCanvas);
 async function initialize() {
     statusInfo.textContent = "Status: Loading Resources...";
     try {
-        // Load font and program in parallel
+        // Load font and program list first
         await Promise.all([
             loadFontRom(),
-            loadProgramSys()
+            loadProgramList() // Load the list of programs
         ]);
 
-        if (loadedFontRomData && loadedProgramData) {
-            resetEmulator(); // Reset and load program after resources are ready
-            resizeCanvas(); // Initial resize
-            statusInfo.textContent = "Status: Ready";
+        // Populate the selector dropdown
+        populateProgramSelector();
+
+        // Now load the initially selected program and reset
+        if (selectedProgramPath) {
+             await resetEmulator(); // Reset loads the selected program
+             resizeCanvas(); // Initial resize
+             // Status is set by resetEmulator
+        } else if (availablePrograms.length > 0) {
+             console.warn("No program selected by default, but programs are available.");
+             statusInfo.textContent = "Status: Select a program and press Reset.";
         } else {
-            throw new Error("One or more resources failed to load.");
+             throw new Error("Font loaded, but no programs found or list failed to load.");
         }
+
     } catch (error) {
         console.error("Initialization failed:", error);
-        statusInfo.textContent = "Status: Error loading resources!";
+        statusInfo.textContent = "Status: Error during initialization!";
         // Error message might already be on canvas from loading functions
     }
 }

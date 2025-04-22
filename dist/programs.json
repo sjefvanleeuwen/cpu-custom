@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Hello World",
+    "path": "dist/hello.sys"
+  },
+  {
+    "name": "Test Program",
+    "path": "dist/test.sys"
+  }
+]

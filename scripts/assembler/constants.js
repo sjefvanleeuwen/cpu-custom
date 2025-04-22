@@ -9,6 +9,9 @@ export const OPCODES = {
     INY: 0xC8,
     DEX: 0xCA,
     RTS: 0x60,
+    PLA: 0x68, // Add PLA
+    PHA: 0x48, // Add PHA
+    TAX: 0xAA, // Add TAX
 
     // Immediate
     LDX_IMM: 0xA2,
@@ -17,11 +20,14 @@ export const OPCODES = {
     ADC_IMM: 0x69,
     CMP_IMM: 0xC9,
     CPY_IMM: 0xC0,
+    CPX_IMM: 0xE0, // Add CPX Immediate
 
     // Zero Page
     LDA_ZP: 0xA5,
     STA_ZP: 0x85,
     STX_ZP: 0x86,
+    CPX_ZP: 0xE4, // Add CPX Zero Page
+    INC_ZP: 0xE6, // Add INC Zero Page
     // Add other ZP opcodes (LDX, LDY, STY, ADC, CMP, CPY, etc.)
 
     // Absolute
@@ -29,6 +35,7 @@ export const OPCODES = {
     STA_ABS: 0x8D,
     JMP_ABS: 0x4C,
     JSR_ABS: 0x20,
+    CPX_ABS: 0xEC, // Add CPX Absolute
     // Add other ABS opcodes
 
     // Absolute, X

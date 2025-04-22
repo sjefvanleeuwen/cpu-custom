@@ -1,4 +1,4 @@
-import { parseLine, parseConstantDefinition, parseOrgDirective, parseByteDirective } from './parser.js';
+import { parseLine, parseConstantDefinition, parseOrgDirective, parseByteDirective, parseOperand } from './parser.js'; // Added parseOperand
 
 /**
  * Parses an ASCIIZ string directive and returns the string content.
@@ -16,6 +16,21 @@ function parseAsciizDirective(line, lineNumber) {
 }
 
 /**
+ * Parses a .WORD directive and returns the number of words.
+ * @param {string} line The line containing the .WORD directive.
+ * @param {number} lineNumber For error reporting.
+ * @returns {number} The number of words defined.
+ */
+function parseWordDirectiveCount(line, lineNumber) {
+    const match = line.match(/^\s*\.WORD\s+(.*)/i);
+    if (match) {
+        const values = match[1].split(',');
+        return values.length;
+    }
+    throw new Error(`[Line ${lineNumber}] Pass 1: Invalid .WORD directive format: ${line}`);
+}
+
+/**
  * Estimates the size of an instruction based on mnemonic and operands.
  * @param {string} mnemonic The instruction mnemonic.
  * @param {string[]} operands Array of operand strings.
@@ -28,12 +43,11 @@ function parseAsciizDirective(line, lineNumber) {
 function estimateSize(mnemonic, operands, lineWithoutLabel, constants, labels, lineNumber) {
     if (!mnemonic) return 0; // Only a label or empty line
 
+    // Directives
     if (mnemonic === '.BYTE') {
         // Size is determined by the number of operands
         return operands.length > 0 ? operands.length : 0; // Handle empty .BYTE?
     }
-    
-    // Handle .ASCIIZ directive - size is string length + null terminator
     if (mnemonic === '.ASCIIZ') {
         try {
             const str = parseAsciizDirective(lineWithoutLabel, lineNumber);
@@ -42,33 +56,58 @@ function estimateSize(mnemonic, operands, lineWithoutLabel, constants, labels, l
             throw error;
         }
     }
+    if (mnemonic === '.WORD') {
+        try {
+            const wordCount = parseWordDirectiveCount(lineWithoutLabel, lineNumber);
+            return wordCount * 2; // 2 bytes per word
+        } catch (error) {
+            throw error;
+        }
+    }
 
     // Implied Instructions (1 byte)
-    if (['INX', 'INY', 'DEX', 'CLC', 'SEC', 'RTS', 'NOP'].includes(mnemonic)) {
+    if (['INX', 'INY', 'DEX', 'CLC', 'SEC', 'RTS', 'NOP', 'PLA', 'PHA', 'TAX'].includes(mnemonic)) { // Added PLA, PHA, TAX
         return 1;
     }
 
     // Immediate Instructions (2 bytes)
-    if (['LDX', 'LDY', 'LDA', 'ADC', 'CMP', 'CPY'].includes(mnemonic) && operands[0]?.startsWith('#')) {
+    if (['LDX', 'LDY', 'LDA', 'ADC', 'CMP', 'CPY', 'CPX'].includes(mnemonic) && operands[0]?.startsWith('#')) { // Added CPX
         return 2;
     }
 
     // Zero Page Instructions (2 bytes)
     // Basic check: if operand is a known constant/label < 256 or a direct ZP address
-    if (['LDA', 'STA', 'LDX', 'STX'].includes(mnemonic) && operands.length === 1 && !lineWithoutLabel.includes(',') && !lineWithoutLabel.includes('(')) {
+    if (['LDA', 'STA', 'LDX', 'STX', 'CPX', 'INC'].includes(mnemonic) && operands.length === 1 && !lineWithoutLabel.includes(',') && !lineWithoutLabel.includes('(')) { // Added CPX, INC
         try {
             // Attempt to parse the operand to check its value
             const value = parseOperand(operands[0], labels, constants, lineNumber);
             if (value < 0x100) {
                 return 2; // Assume Zero Page
             } else {
-                return 3; // Assume Absolute
+                // If it's INC, it doesn't have an Absolute mode like LDA/STA etc.
+                if (mnemonic === 'INC') {
+                     throw new Error(`[Line ${lineNumber}] Pass 1: INC does not support Absolute addressing mode like this.`);
+                }
+                return 3; // Assume Absolute for others
             }
         } catch (e) {
             // If parsing fails (e.g., forward label reference), assume Absolute for safety
+            // Except for INC which doesn't have a 3-byte absolute form
+             if (mnemonic === 'INC') {
+                 // Assume ZP if parsing fails for INC, as it's the most likely intent
+                 return 2;
+             }
             return 3;
         }
     }
+
+    // Absolute Instructions (3 bytes) - Add CPX if needed
+    if (['LDA', 'STA', 'LDX', 'LDY', 'JMP', 'JSR', 'CPX'].includes(mnemonic) && operands.length === 1 && !lineWithoutLabel.includes(',') && !lineWithoutLabel.includes('(')) { // Added CPX
+        // This overlaps with the ZP check, but the ZP check runs first.
+        // If it wasn't ZP, it's likely Absolute.
+        return 3;
+    }
+
 
     // Absolute, X/Y Instructions (3 bytes)
     if (['LDA', 'STA'].includes(mnemonic) && operands.length === 2 && (operands[1].toUpperCase() === 'X' || operands[1].toUpperCase() === 'Y') && !lineWithoutLabel.includes('(')) {
@@ -85,10 +124,7 @@ function estimateSize(mnemonic, operands, lineWithoutLabel, constants, labels, l
         return 2;
     }
 
-    // Absolute Jump/Subroutine Instructions (3 bytes)
-    if (['JMP', 'JSR'].includes(mnemonic) && operands.length === 1) {
-        return 3;
-    }
+    // Absolute Jump/Subroutine Instructions (3 bytes) - Already covered by Absolute check above
 
     throw new Error(`[Line ${lineNumber}] Pass 1: Unknown instruction/directive for size estimation: ${lineWithoutLabel}`);
 }
@@ -148,20 +184,8 @@ export function runPass1(rawLines) {
             // Estimate size if there's a mnemonic
             let estimatedSize = 0;
             if (mnemonic) {
-                 // Special handling for .BYTE size estimation
-                 if (mnemonic === '.BYTE') {
-                     const byteValues = parseByteDirective(processedLine, labels, constants, lineNumber);
-                     estimatedSize = byteValues ? byteValues.length : 0;
-                 } else if (mnemonic === '.ASCIIZ') {
-                     try {
-                         const str = parseAsciizDirective(processedLine, lineNumber);
-                         estimatedSize = str.length + 1; // String length + null terminator
-                     } catch (error) {
-                         throw error;
-                     }
-                 } else {
-                     estimatedSize = estimateSize(mnemonic, operands, processedLine, constants, labels, lineNumber);
-                 }
+                 // Use the updated estimateSize function
+                 estimatedSize = estimateSize(mnemonic, operands, processedLine, constants, labels, lineNumber);
             }
 
 

@@ -10,6 +10,30 @@ export function parseOperand(operand, labels, constants, lineNumber) {
     if (!operand) throw new Error(`[Line ${lineNumber}] Missing operand`);
     const operandUpper = operand.toUpperCase();
 
+    // Handle parentheses for indirect addressing
+    if (operand.startsWith('(') && operand.endsWith(')')) {
+        // Extract the inner content between parentheses
+        const innerOperand = operand.substring(1, operand.length - 1).trim();
+        return parseOperand(innerOperand, labels, constants, lineNumber);
+    }
+
+    // Handle address with offset (e.g. ZP_PTR1+1)
+    const offsetMatch = operand.match(/^([A-Z_][A-Z0-9_]*)\+(\d+)$/i);
+    if (offsetMatch) {
+        const baseName = offsetMatch[1].toUpperCase();
+        const offset = parseInt(offsetMatch[2], 10);
+        
+        // Check if base is a constant or label
+        if (constants[baseName] !== undefined) {
+            return constants[baseName] + offset;
+        }
+        if (labels[baseName] !== undefined) {
+            return labels[baseName] + offset;
+        }
+        
+        throw new Error(`[Line ${lineNumber}] Unknown base name in offset expression: ${baseName}`);
+    }
+
     if (constants[operandUpper] !== undefined) return constants[operandUpper];
     if (labels[operandUpper] !== undefined) return labels[operandUpper];
 
@@ -208,3 +232,67 @@ export function parseAsciizDirective(line, lineNumber) {
     }
     throw new Error(`[Line ${lineNumber}] Invalid .ASCIIZ directive format: ${line}`);
 }
+
+/**
+ * Evaluates a simple expression involving numbers, constants, and labels.
+ * @param {string} expression The expression string.
+ * @param {object} constants Map of constants.
+ * @param {object} labels Map of labels.
+ * @param {number} currentAddress Current address (for relative calculations, if needed).
+ * @param {number} lineNumber For error reporting.
+ * @returns {number} The numeric result.
+ */
+function evaluateExpression(expression, constants, labels, currentAddress, lineNumber) {
+    expression = expression.trim();
+    // Handle Hex
+    if (expression.startsWith('$')) {
+        return parseInt(expression.substring(1), 16);
+    }
+    // Handle Binary (optional)
+    if (expression.startsWith('%')) {
+        return parseInt(expression.substring(1), 2);
+    }
+    // Handle Decimal
+    if (/^[0-9]+$/.test(expression)) {
+        return parseInt(expression, 10);
+    }
+    // Handle Constants
+    const upperExpr = expression.toUpperCase();
+    if (constants[upperExpr] !== undefined) {
+        return constants[upperExpr];
+    }
+    // Handle Labels
+    if (labels[upperExpr] !== undefined) {
+        return labels[upperExpr];
+    }
+
+    // TODO: Add simple arithmetic like LABEL+1, CONSTANT-2 etc.
+
+    throw new Error(`[Line ${lineNumber}] Cannot evaluate expression: ${expression}`);
+}
+
+/**
+ * Parses a .WORD directive line and returns an array of word values.
+ * @param {string} line The line containing the .WORD directive.
+ * @param {object} labels Map of labels.
+ * @param {object} constants Map of constants.
+ * @param {number} lineNumber For error reporting.
+ * @returns {number[]|null} Array of word values or null if parsing fails.
+ */
+export function parseWordDirective(line, labels, constants, lineNumber) {
+    const match = line.match(/^\s*\.WORD\s+(.*)/i);
+    if (match) {
+        const valuesStr = match[1];
+        const wordValues = valuesStr.split(',').map(v => {
+            const value = evaluateExpression(v.trim(), constants, labels, 0, lineNumber); // Pass 0 for currentAddress
+            if (value < 0 || value > 65535) {
+                throw new Error(`[Line ${lineNumber}] WORD value ${v.trim()} (= ${value}) out of range (0-65535).`);
+            }
+            return value;
+        });
+        return wordValues;
+    }
+    return null; // Or throw error
+}
+
+export { evaluateExpression };
