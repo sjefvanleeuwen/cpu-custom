@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "build:rom": "node scripts/build-rom.js",
-    "asm": "node scripts/assembler.js asm/hello.asm dist/hello.sys"
+    "asm": "node scripts/assembler.js asm/hello.asm dist/hello.sys",
+    "asm:test": "node scripts/assembler.js asm/test.asm dist/test.sys"
   },
   "keywords": [
     "cpu",

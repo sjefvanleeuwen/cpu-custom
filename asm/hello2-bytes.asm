@@ -21,4 +21,7 @@ DONE:
 
 ; Data Segment
 .ORG STRING_DATA  ; Start data at address 0x0100
-  .ASCIIZ "LLM MICRO COMPUTER" ; Define the null-terminated string
+  .BYTE $48, $45, $4C, $4C, $4F ; H E L L O
+  .BYTE $20                     ; Space
+  .BYTE $57, $4F, $52, $4C, $44 ; W O R L D
+  .BYTE $00                     ; Null terminator

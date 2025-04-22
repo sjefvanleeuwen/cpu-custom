@@ -50,6 +50,45 @@ export function absoluteX(cpu) {
     cpu.memory.write(effectiveAddress, cpu.registers.A);
 }
 
+/**
+ * Executes STA (Indirect), Y.
+ * Opcode: 0x91 (example)
+ * Fetches a zero-page address. Reads the 16-bit base address from that ZP location.
+ * Adds the Y register to the base address to get the final effective address.
+ * Stores the accumulator value at the effective address.
+ * Addressing Mode: Indirect Indexed Y
+ * @param {CPU} cpu The CPU instance.
+ */
+export function indirectIndexedY(cpu) {
+    const zeroPageAddress = cpu.fetchByte();
+
+    // Read the 16-bit base address from the zero page location
+    // Handle 6502 page boundary bug for indirect reads (optional but accurate)
+    const lowByte = cpu.memory.read(zeroPageAddress);
+    const highByteAddr = (zeroPageAddress + 1) & 0xFF; // Wrap around within zero page
+    const highByte = cpu.memory.read(highByteAddr);
+    const baseAddress = (highByte << 8) | lowByte;
+
+    const effectiveAddress = (baseAddress + cpu.registers.Y) & 0xFFFF; // Add Y
+
+    // STA indirect indexed Y typically doesn't have page cross penalty for the write itself.
+    // The read of the base address might, but we don't model that level of cycle accuracy here yet.
+
+    cpu.memory.write(effectiveAddress, cpu.registers.A);
+}
+
+/**
+ * Executes STA Zero Page.
+ * Opcode: 0x85 (example)
+ * Fetches the zero-page address and stores the accumulator there.
+ * Addressing Mode: Zero Page
+ * @param {CPU} cpu The CPU instance.
+ */
+export function zeroPage(cpu) {
+    const address = cpu.fetchByte();
+    cpu.memory.write(address, cpu.registers.A);
+}
+
 // Add functions for other STA addressing modes (Zero Page, Absolute X, etc.) here
 // export function zeroPage(cpu) { ... }
 // export function absoluteX(cpu) { ... }

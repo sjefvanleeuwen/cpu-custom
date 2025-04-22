@@ -12,6 +12,10 @@ import * as BNE from './bne.js'; // Import BNE
 import * as INX from './inx.js'; // Import INX
 import * as CMP from './cmp.js'; // Import CMP
 import * as BEQ from './beq.js'; // Import BEQ
+import * as JSR from './jsr.js'; // Import JSR
+import * as RTS from './rts.js'; // Import RTS
+import * as DEX from './dex.js'; // Import DEX
+import * as BPL from './bpl.js'; // Import BPL
 // Import other opcodes here as they are created
 
 // Map of opcode byte value to instruction object
@@ -38,6 +42,14 @@ export const opcodes = {
     0xE8: { name: 'INX', execute: INX.execute, cycles: 2, addressingMode: 'implied' },       // INX Implied
     0xC9: { name: 'CMP_IMM', execute: CMP.immediate, cycles: 2, addressingMode: 'immediate' }, // CMP Immediate
     0xF0: { name: 'BEQ', execute: BEQ.execute, cycles: 2, addressingMode: 'relative' },      // BEQ Relative (+1 cycle if branch taken, +1 if page crossed)
+    0x20: { name: 'JSR', execute: JSR.execute, cycles: 6, addressingMode: 'absolute' }, // JSR Absolute
+    0x60: { name: 'RTS', execute: RTS.execute, cycles: 6, addressingMode: 'implied' },  // RTS Implied
+    0xCA: { name: 'DEX', execute: DEX.execute, cycles: 2, addressingMode: 'implied' },       // DEX Implied
+    0x91: { name: 'STA_IND_Y', execute: STA.indirectIndexedY, cycles: 6, addressingMode: 'indirectIndexedY' }, // STA (Indirect), Y
+    0x10: { name: 'BPL', execute: BPL.execute, cycles: 2, addressingMode: 'relative' },      // BPL Relative (+1 cycle if branch taken, +1 if page crossed)
+    0xA5: { name: 'LDA_ZP', execute: LDA.zeroPage, cycles: 3, addressingMode: 'zeroPage' },       // LDA Zero Page
+    0x85: { name: 'STA_ZP', execute: STA.zeroPage, cycles: 3, addressingMode: 'zeroPage' },       // STA Zero Page
+    0xB1: { name: 'LDA_IND_Y', execute: LDA.indirectIndexedY, cycles: 5, addressingMode: 'indirectIndexedY' }, // LDA (Indirect), Y (+1 cycle if page crossed)
 
     // Add other opcodes and addressing modes here
     // e.g., LDA Zero Page, STA Absolute Y, JMP Indirect etc.

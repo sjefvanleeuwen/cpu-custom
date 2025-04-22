@@ -67,6 +67,22 @@ export class CPU {
         return (highByte << 8) | lowByte;
     }
 
+    /** Pushes a byte onto the stack. */
+    pushStack(value) {
+        // Stack grows downwards from 0x01FF
+        const stackAddress = 0x0100 | this.registers.SP;
+        this.memory.write(stackAddress, value & 0xFF);
+        this.registers.SP = (this.registers.SP - 1) & 0xFF; // Decrement stack pointer, wrap around
+    }
+
+    /** Pops a byte from the stack. */
+    popStack() {
+        // Stack grows downwards, so increment SP first
+        this.registers.SP = (this.registers.SP + 1) & 0xFF; // Increment stack pointer, wrap around
+        const stackAddress = 0x0100 | this.registers.SP;
+        return this.memory.read(stackAddress);
+    }
+
     /** Executes a single instruction cycle (fetch-decode-execute). */
     step() {
         if (!this.isRunning && this.cycles > 0) {

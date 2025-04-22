@@ -73,6 +73,51 @@ export function absoluteX(cpu) {
     cpu.registers.setZNFlags(value);
 }
 
+/**
+ * Executes LDA Zero Page.
+ * Opcode: 0xA5 (example)
+ * Fetches a zero-page address and loads the byte from that address.
+ * Addressing Mode: Zero Page
+ * @param {CPU} cpu The CPU instance.
+ */
+export function zeroPage(cpu) {
+    const address = cpu.fetchByte();
+    const value = cpu.memory.read(address);
+    cpu.registers.A = value;
+    cpu.registers.setZNFlags(value);
+}
+
+/**
+ * Executes LDA (Indirect), Y.
+ * Opcode: 0xB1 (example)
+ * Fetches a zero-page address. Reads the 16-bit base address from that ZP location.
+ * Adds the Y register to the base address to get the final effective address.
+ * Loads the byte from the effective address.
+ * Addressing Mode: Indirect Indexed Y
+ * @param {CPU} cpu The CPU instance.
+ */
+export function indirectIndexedY(cpu) {
+    const zeroPageAddress = cpu.fetchByte();
+
+    // Read the 16-bit base address from the zero page location
+    const lowByte = cpu.memory.read(zeroPageAddress);
+    const highByteAddr = (zeroPageAddress + 1) & 0xFF; // Wrap around within zero page
+    const highByte = cpu.memory.read(highByteAddr);
+    const baseAddress = (highByte << 8) | lowByte;
+
+    const effectiveAddress = (baseAddress + cpu.registers.Y) & 0xFFFF; // Add Y
+
+    // Cycle penalty if page boundary is crossed (optional)
+    if ((baseAddress & 0xFF00) !== (effectiveAddress & 0xFF00)) {
+        cpu.cycles++;
+        cpu.totalCycles++;
+    }
+
+    const value = cpu.memory.read(effectiveAddress);
+    cpu.registers.A = value;
+    cpu.registers.setZNFlags(value);
+}
+
 // Add functions for other LDA addressing modes (Zero Page, Absolute, etc.) here
 // export function zeroPage(cpu) { ... }
 // export function absolute(cpu) { ... }

@@ -1,16 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-
-// --- Basic Opcode Lookup (Mnemonic + Mode -> Opcode Byte) ---
-const OPCODES = {
-    LDX_IMM: 0xA2,
-    LDA_ABS_X: 0xBD,
-    CMP_IMM: 0xC9,
-    BEQ_REL: 0xF0,
-    STA_ABS_X: 0x9D,
-    INX_IMP: 0xE8,
-    JMP_ABS: 0x4C,
-};
+import { runPass1 } from './assembler/pass1.js';
+import { runPass2 } from './assembler/pass2.js';
 
 // --- Assembler Logic ---
 const inputFile = process.argv[2];
@@ -21,229 +12,55 @@ if (!inputFile || !outputFile) {
     process.exit(1);
 }
 
-const inputText = fs.readFileSync(inputFile, 'utf-8');
-const lines = inputText.split('\n').map((line, index) => ({
-    text: line.trim(),
-    lineNumber: index + 1,
-}));
-
-let currentAddress = 0;
-const labels = {};
-const constants = {};
-const outputBytes = new Map();
-
-// --- Pass 1: Collect Labels, Constants, and Parse Lines ---
 try {
+    // --- Read Input ---
+    console.log(`Reading input file: ${inputFile}`);
     const asmContent = fs.readFileSync(inputFile, 'utf8');
     const rawLines = asmContent.split(/\r?\n/);
-    const pass1Lines = []; // Temporary storage for lines needing Pass 2 processing
 
-    let orgAddress = 0;
-    currentAddress = orgAddress;
+    // --- Pass 1 ---
+    console.log("--- Starting Pass 1 ---");
+    const { labels, constants, pass1Lines, errors: pass1Errors } = runPass1(rawLines);
 
-    rawLines.forEach((line, index) => {
-        const lineNumber = index + 1;
-        let processedLine = line.replace(/;.*$/, '').trim();
+    if (pass1Errors.length > 0) {
+        console.error("Errors found during Pass 1:");
+        pass1Errors.forEach(err => console.error(`  ${err}`));
+        process.exit(1);
+    }
 
-        if (!processedLine) return; // Skip empty/comment lines
+    console.log("--- Labels Found ---");
+    console.log(labels);
+    console.log("--- Constants Found ---");
+    console.log(constants);
+    console.log("--- Pass 1 Complete ---");
 
-        // Handle .ORG directive first - Allow numeric or constant
-        const orgMatch = processedLine.match(/^\.ORG\s+(?:\$?([0-9A-Fa-f]+)|([A-Z_][A-Z0-9_]*))/i);
-        if (orgMatch) {
-            let orgValue;
-            if (orgMatch[1]) { // Matched numeric value
-                orgValue = parseInt(orgMatch[1], 16);
-            } else if (orgMatch[2]) { // Matched constant name
-                const constName = orgMatch[2].toUpperCase();
-                if (constants[constName] === undefined) {
-                    throw new Error(`[Line ${lineNumber}] Undefined constant used in .ORG: ${constName}`);
-                }
-                orgValue = constants[constName];
-            } else {
-                 throw new Error(`[Line ${lineNumber}] Invalid .ORG directive format: ${processedLine}`);
-            }
 
-            orgAddress = orgValue;
-            currentAddress = orgAddress;
-            console.log(`  [Line ${lineNumber}] .ORG set to 0x${currentAddress.toString(16)}`);
-            return; // Handled .ORG, skip rest for this line
-        }
+    // --- Pass 2 ---
+    console.log("--- Starting Pass 2 ---");
+    const { outputBytes, errors: pass2Errors } = runPass2(pass1Lines, labels, constants);
 
-        // Handle Constants next
-        const constMatch = processedLine.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*\$?([0-9A-Fa-f]+)/i);
-        if (constMatch) {
-            const name = constMatch[1].toUpperCase();
-            const value = parseInt(constMatch[2], 16);
-            if (constants[name] !== undefined) {
-                throw new Error(`[Line ${lineNumber}] Constant '${name}' redefined.`);
-            }
-            constants[name] = value;
-            console.log(`  [Line ${lineNumber}] Defined Constant: ${name} = 0x${value.toString(16)}`);
-            return; // Handled constant, skip rest for this line
-        }
+     if (pass2Errors.length > 0) {
+        console.error("Errors found during Pass 2:");
+        pass2Errors.forEach(err => console.error(`  ${err}`));
+        process.exit(1);
+    }
+    console.log("--- Pass 2 Complete ---");
 
-        // --- Line contains code/data or label ---
-        let lineAddress = currentAddress; // Address for this potential instruction/data
-        let hasLabel = false;
-
-        // Process potential label
-        const labelMatch = processedLine.match(/^([A-Z_][A-Z0-9_]*):/i);
-        if (labelMatch) {
-            hasLabel = true;
-            const label = labelMatch[1].toUpperCase();
-            if (labels[label] !== undefined) {
-                throw new Error(`[Line ${lineNumber}] Label '${label}' redefined.`);
-            }
-            labels[label] = lineAddress;
-            console.log(`  [Line ${lineNumber}] Found Label: ${label} at 0x${lineAddress.toString(16)}`);
-            processedLine = processedLine.substring(labelMatch[0].length).trim();
-            // If line was *only* a label, we still need to process potential empty line
-            if (!processedLine) return;
-        }
-
-        // --- Estimate size (only if it's not ORG/Constant) ---
-        let estimatedSize = 0;
-        const parts = processedLine.split(/[\s,]+/);
-        const mnemonic = parts[0].toUpperCase();
-
-        if (mnemonic === '.BYTE') {
-            const byteValues = processedLine.substring(5).split(',').map(s => s.trim());
-            estimatedSize = byteValues.length;
-        } else if (mnemonic === 'INX') {
-            estimatedSize = 1;
-        } else if (['LDX', 'LDA', 'CMP', 'CPY'].includes(mnemonic) && parts[1]?.startsWith('#')) {
-            estimatedSize = 2;
-        } else if (['LDA', 'STA'].includes(mnemonic) && parts[2]?.toUpperCase() === 'X') {
-            estimatedSize = 3;
-        } else if (['LDA', 'STA'].includes(mnemonic) && parts[2]?.toUpperCase() === 'Y') {
-            estimatedSize = 3;
-        } else if (['BEQ', 'BNE'].includes(mnemonic)) {
-            estimatedSize = 2;
-        } else if (mnemonic === 'JMP') {
-            estimatedSize = 3;
-        } else {
-             throw new Error(`[Line ${lineNumber}] Pass 1: Unknown instruction/directive for size estimation: ${mnemonic}`);
-        }
-
-        // Store line info for Pass 2
-        pass1Lines.push({ text: processedLine, address: lineAddress, lineNumber });
-
-        // Increment currentAddress for the next line
-        currentAddress += estimatedSize;
-    });
-
-    // Now assign pass1Lines to lines for Pass 2
-    lines.length = 0; // Clear the original lines array
-    lines.push(...pass1Lines); // Add the processed lines
-
-} catch (error) {
-    console.error(`Error during Pass 1: ${error.message}`);
-    process.exit(1);
-}
-
-console.log("--- Labels Found ---");
-console.log(labels);
-console.log("--- Constants Found ---");
-console.log(constants);
-console.log("--- Starting Pass 2 ---");
-
-// --- Pass 2: Generate Bytes ---
-try {
-    // No need to track currentAddress here, use lineInfo.address
-    // currentAddress = 0;
-
-    lines.forEach(lineInfo => {
-        const { text, address, lineNumber } = lineInfo; // Get address from lineInfo
-
-        // currentAddress = address; // Set context for relative branches
-
-        const parts = text.split(/[\s,]+/);
-        const mnemonic = parts[0].toUpperCase();
-        const operand1Raw = parts[1];
-        const operand2Raw = parts[2];
-
-        let bytes = [];
-        // let instructionSize = 0; // Not needed here
-
-        // Helper to parse operand
-        const parseOperand = (operand) => {
-            if (!operand) throw new Error(`[Line ${lineNumber}] Missing operand for ${mnemonic}`);
-            const operandUpper = operand.toUpperCase();
-            if (constants[operandUpper] !== undefined) return constants[operandUpper];
-            if (labels[operandUpper] !== undefined) return labels[operandUpper];
-            if (operand.startsWith('$')) return parseInt(operand.substring(1), 16);
-            if (operand.startsWith('#')) { // Immediate value
-                 const immValue = operand.substring(1);
-                 if (immValue.startsWith('$')) return parseInt(immValue.substring(1), 16);
-                 if (/^\d+$/.test(immValue)) return parseInt(immValue, 10);
-                 throw new Error(`[Line ${lineNumber}] Invalid immediate value: ${operand}`);
-            }
-            if (/^\d+$/.test(operand)) return parseInt(operand, 10); // Decimal number
-            throw new Error(`[Line ${lineNumber}] Unknown operand format or undefined label/constant: ${operand}`);
-        };
-
-        // --- Instruction Handling ---
-        if (mnemonic === '.BYTE') {
-            const byteStrings = text.substring(5).split(',');
-            bytes = byteStrings.map(s => parseOperand(s.trim()));
-        } else if (mnemonic === 'LDX' && operand1Raw?.startsWith('#')) {
-            bytes.push(OPCODES.LDX_IMM);
-            bytes.push(parseOperand(operand1Raw) & 0xFF);
-        } else if (mnemonic === 'LDA' && operand2Raw?.toUpperCase() === 'X') {
-            bytes.push(OPCODES.LDA_ABS_X);
-            const addr = parseOperand(operand1Raw);
-            bytes.push(addr & 0xFF); // Low byte
-            bytes.push((addr >> 8) & 0xFF); // High byte
-        } else if (mnemonic === 'CMP' && operand1Raw?.startsWith('#')) {
-            bytes.push(OPCODES.CMP_IMM);
-            bytes.push(parseOperand(operand1Raw) & 0xFF);
-        } else if (mnemonic === 'BEQ') {
-            bytes.push(OPCODES.BEQ_REL);
-            const targetAddress = parseOperand(operand1Raw);
-            // Use the line's address for relative calculation
-            const pcAfterFetch = address + 2;
-            const offset = targetAddress - pcAfterFetch;
-            if (offset < -128 || offset > 127) {
-                throw new Error(`[Line ${lineNumber}] Branch target out of range for BEQ: ${offset}`);
-            }
-            bytes.push(offset & 0xFF);
-        } else if (mnemonic === 'STA' && operand2Raw?.toUpperCase() === 'X') {
-            bytes.push(OPCODES.STA_ABS_X);
-            const addr = parseOperand(operand1Raw);
-            bytes.push(addr & 0xFF); // Low byte
-            bytes.push((addr >> 8) & 0xFF); // High byte
-        } else if (mnemonic === 'INX') {
-            bytes.push(OPCODES.INX_IMP);
-        } else if (mnemonic === 'JMP') {
-            bytes.push(OPCODES.JMP_ABS);
-            const addr = parseOperand(operand1Raw);
-            bytes.push(addr & 0xFF); // Low byte
-            bytes.push((addr >> 8) & 0xFF); // High byte
-        } else {
-            // This error should ideally be caught in Pass 1 now
-            throw new Error(`[Line ${lineNumber}] Pass 2: Unknown mnemonic or addressing mode: ${text}`);
-        }
-
-        // Store generated bytes at the correct address
-        for (let i = 0; i < bytes.length; i++) {
-            if (outputBytes.has(address + i)) { // Use line's address
-                 console.warn(`[Line ${lineNumber}] Warning: Overwriting byte at address 0x${(address + i).toString(16)}`);
-            }
-            outputBytes.set(address + i, bytes[i]); // Use line's address
-        }
-    });
 
     // --- Write Output File ---
+    console.log(`Writing output file: ${outputFile}`);
     let maxAddress = 0;
-    for (const address of outputBytes.keys()) {
-        if (address > maxAddress) {
-            maxAddress = address;
-        }
+    if (outputBytes.size > 0) {
+        maxAddress = Math.max(...outputBytes.keys());
     }
     const fileSize = maxAddress + 1; // Size up to the last byte written
     const outputBuffer = new Uint8Array(fileSize).fill(0); // Initialize with 0s
 
     for (const [address, byteValue] of outputBytes.entries()) {
+        if (address >= fileSize) {
+             console.error(`Internal Error: Attempted to write byte 0x${byteValue.toString(16)} to address 0x${address.toString(16)} which is beyond calculated file size ${fileSize}`);
+             continue; // Should not happen if Pass 1 is correct
+        }
         outputBuffer[address] = byteValue;
     }
 
@@ -251,6 +68,333 @@ try {
     console.log(`Assembly successful. Output written to ${outputFile} (${outputBuffer.length} bytes).`);
 
 } catch (error) {
-    console.error(`Error during Pass 2 or writing file: ${error.message}`);
+    console.error(`Assembler failed: ${error.message}`);
+    console.error(error.stack); // Print stack trace for debugging
     process.exit(1);
+}
+
+// --- Pass 1: Symbol Table and Address Calculation ---
+function pass1(lines) {
+    console.log("--- Starting Pass 1 ---"); // Keep existing log
+    const symbolTable = {};
+    const constants = {};
+    const errors = [];
+    let currentAddress = 0;
+    let memorySize = 65536; // Default memory size
+
+    lines.forEach((line, index) => {
+        const lineNumber = index + 1;
+        const originalLine = line; // Keep original for context if needed
+        line = line.replace(/;.*$/, '').trim(); // Remove comments and trim whitespace
+
+        if (!line) return; // Skip empty lines
+
+        // Attempt to match constants first (must be on their own line)
+        const constantMatch = line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/i);
+        if (constantMatch) {
+            const name = constantMatch[1].toUpperCase();
+            const valueStr = constantMatch[2].trim();
+            try {
+                const value = evaluateExpression(valueStr, constants, symbolTable, 0); // Pass 0 for current address if needed, though usually not for constants
+                constants[name] = value;
+                console.log(`  [Line ${lineNumber}] Defined Constant: ${name} = 0x${value.toString(16)}`);
+            } catch (e) {
+                errors.push(`[Line ${lineNumber}] Pass 1: Error evaluating constant ${name}: ${e.message}`);
+            }
+            return; // Processed constant line, move to next line
+        }
+
+        // Match labels at the beginning of the line
+        const labelMatch = line.match(/^([A-Z_][A-Z0-9_]*):/i);
+        let codePart = line;
+        if (labelMatch) {
+            const label = labelMatch[1].toUpperCase();
+            if (symbolTable[label] !== undefined || constants[label] !== undefined) {
+                errors.push(`[Line ${lineNumber}] Pass 1: Duplicate label/symbol definition: ${label}`);
+            } else {
+                symbolTable[label] = currentAddress;
+                console.log(`  [Line ${lineNumber}] Found Label: ${label} at 0x${currentAddress.toString(16)}`);
+            }
+            codePart = line.substring(labelMatch[0].length).trim(); // Get the rest of the line after the label
+        }
+
+        if (!codePart) return; // Skip lines with only a label
+
+        // Now process directives or instructions in the codePart
+        const directiveMatch = codePart.match(/^\.(ORG|BYTE|WORD|ASCIIZ)\s+(.*)/i); // Updated regex
+        const instructionMatch = codePart.match(/^([A-Z]{3})\s*(.*)/i);
+
+        // --- Debugging ---
+        if (lineNumber === 24) { // Specific line causing the error
+             console.log(`  [DEBUG Line ${lineNumber}] codePart: "${codePart}"`);
+             console.log(`  [DEBUG Line ${lineNumber}] directiveMatch result:`, directiveMatch);
+             console.log(`  [DEBUG Line ${lineNumber}] instructionMatch result:`, instructionMatch);
+        }
+        // --- End Debugging ---
+
+
+        if (directiveMatch) {
+            const directive = directiveMatch[1].toUpperCase();
+            const valueStr = directiveMatch[2].trim();
+            // console.log(`  [DEBUG Line ${lineNumber}] Directive found: ${directive}`); // Optional general debug
+            if (directive === 'ORG') {
+                try {
+                    currentAddress = evaluateExpression(valueStr, constants, symbolTable, currentAddress);
+                    console.log(`  [Line ${lineNumber}] .ORG set to 0x${currentAddress.toString(16)}`);
+                    if (currentAddress > memorySize) {
+                         errors.push(`[Line ${lineNumber}] Pass 1: ORG address ${currentAddress} exceeds memory size ${memorySize}`);
+                    }
+                } catch (e) {
+                    errors.push(`[Line ${lineNumber}] Pass 1: Error evaluating ORG expression: ${e.message}`);
+                }
+            } else if (directive === 'BYTE') {
+                try {
+                    const values = valueStr.split(',').map(v => evaluateExpression(v.trim(), constants, symbolTable, currentAddress));
+                    currentAddress += values.length;
+                } catch (e) {
+                    errors.push(`[Line ${lineNumber}] Pass 1: Error evaluating BYTE expression: ${e.message}`);
+                }
+            } else if (directive === 'WORD') {
+                 try {
+                    const values = valueStr.split(',').map(v => evaluateExpression(v.trim(), constants, symbolTable, currentAddress));
+                    currentAddress += values.length * 2;
+                } catch (e) {
+                    errors.push(`[Line ${lineNumber}] Pass 1: Error evaluating WORD expression: ${e.message}`);
+                }
+            } else if (directive === 'ASCIIZ') { // <<< Check for ASCIIZ
+                const stringMatch = valueStr.match(/^"([^"]*)"$/);
+                if (stringMatch) {
+                    const str = stringMatch[1];
+                    currentAddress += str.length + 1; // String length + null terminator
+                    // console.log(`  [DEBUG Line ${lineNumber}] ASCIIZ string: "${str}", size: ${str.length + 1}`); // Optional debug
+                } else {
+                    errors.push(`[Line ${lineNumber}] Pass 1: Invalid string format for .ASCIIZ: ${valueStr}`);
+                }
+            }
+             // NOTE: Removed the redundant error push from the end of the if/else if block
+        } else if (instructionMatch) {
+            const mnemonic = instructionMatch[1].toUpperCase();
+            const operandStr = instructionMatch[2].trim();
+            try {
+                const { size } = getInstructionSizeAndMode(mnemonic, operandStr); // Pass 1 only needs size
+                currentAddress += size;
+            } catch (e) {
+                // Add context to the error from getInstructionSizeAndMode
+                 errors.push(`[Line ${lineNumber}] Pass 1: Error processing instruction "${mnemonic} ${operandStr}": ${e.message}`);
+            }
+        } else {
+            // Only report error if it wasn't a label-only or constant line
+             errors.push(`[Line ${lineNumber}] Pass 1: Unknown instruction/directive for size estimation: ${codePart}`);
+        }
+
+        if (currentAddress > memorySize) {
+             errors.push(`[Line ${lineNumber}] Pass 1: Address ${currentAddress} exceeds memory size ${memorySize} after processing line.`);
+             // Optionally stop processing or clamp address
+        }
+    });
+
+    // ... rest of pass1 function ...
+    if (errors.length > 0) {
+        console.error("Errors found during Pass 1:");
+        errors.forEach(err => console.error(`  ${err}`));
+        // process.exit(1); // Exit if errors found in Pass 1 is often desired
+    }
+
+    return { symbolTable, constants, errors }; // Return errors along with symbols/constants
+}
+
+// --- Pass 2: Code Generation ---
+function pass2(lines, symbolTable, constants) { // Pass constants to pass2
+    console.log("--- Starting Pass 2 ---");
+    const machineCode = new Uint8Array(65536).fill(0); // Use Uint8Array
+    const errors = [];
+    let currentAddress = 0;
+    let highestAddress = -1; // Track highest address written
+    const memorySize = 65536;
+
+    lines.forEach((line, index) => {
+        const lineNumber = index + 1;
+        line = line.replace(/;.*$/, '').trim(); // Remove comments
+
+        if (!line) return; // Skip empty lines
+
+        // Skip constant definitions in Pass 2
+        if (line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/i)) {
+            return;
+        }
+
+        const labelMatch = line.match(/^([A-Z_][A-Z0-9_]*):/i);
+        const codePart = labelMatch ? line.substring(labelMatch[0].length).trim() : line;
+
+        if (!codePart) return; // Skip lines with only a label
+
+        const directiveMatch = codePart.match(/^\.(ORG|BYTE|WORD|ASCIIZ)\s+(.*)/i); // Updated regex
+        const instructionMatch = codePart.match(/^([A-Z]{3})\s*(.*)/i);
+
+        try { // Wrap processing in try-catch for Pass 2 errors
+            if (directiveMatch) {
+                const directive = directiveMatch[1].toUpperCase();
+                const valueStr = directiveMatch[2].trim();
+                if (directive === 'ORG') {
+                    currentAddress = evaluateExpression(valueStr, constants, symbolTable, currentAddress);
+                     if (currentAddress > memorySize) {
+                         throw new Error(`ORG address ${currentAddress} exceeds memory size ${memorySize}`);
+                     }
+                } else if (directive === 'BYTE') {
+                    const values = valueStr.split(',').map(v => evaluateExpression(v.trim(), constants, symbolTable, currentAddress));
+                    values.forEach(value => {
+                        if (currentAddress >= memorySize) throw new Error(`Memory overflow writing BYTE`);
+                        if (value < 0 || value > 255) throw new Error(`BYTE value ${value} out of range (0-255)`);
+                        machineCode[currentAddress++] = value;
+                    });
+                } else if (directive === 'WORD') {
+                    const values = valueStr.split(',').map(v => evaluateExpression(v.trim(), constants, symbolTable, currentAddress));
+                     values.forEach(value => {
+                        if (currentAddress + 1 >= memorySize) throw new Error(`Memory overflow writing WORD`);
+                        if (value < 0 || value > 65535) throw new Error(`WORD value ${value} out of range (0-65535)`);
+                        machineCode[currentAddress++] = value & 0xFF; // Low byte
+                        machineCode[currentAddress++] = (value >> 8) & 0xFF; // High byte
+                    });
+                } else if (directive === 'ASCIIZ') { // <<< Handle ASCIIZ
+                    const stringMatch = valueStr.match(/^"([^"]*)"$/);
+                    if (stringMatch) {
+                        const str = stringMatch[1];
+                        for (let i = 0; i < str.length; i++) {
+                            if (currentAddress >= memorySize) throw new Error(`Memory overflow writing ASCIIZ string`);
+                            machineCode[currentAddress++] = str.charCodeAt(i);
+                        }
+                        if (currentAddress >= memorySize) throw new Error(`Memory overflow writing ASCIIZ null terminator`);
+                        machineCode[currentAddress++] = 0x00; // Null terminator
+                    } else {
+                        // Should have been caught in Pass 1, but good to have a check
+                        throw new Error(`Invalid string format for .ASCIIZ: ${valueStr}`);
+                    }
+                }
+            } else if (instructionMatch) {
+                const mnemonic = instructionMatch[1].toUpperCase();
+                const operandStr = instructionMatch[2].trim();
+                const { opcode, mode, operand, size } = resolveInstruction(mnemonic, operandStr, symbolTable, constants, currentAddress);
+
+                if (currentAddress + size > memorySize) {
+                     throw new Error(`Memory overflow writing instruction ${mnemonic}`);
+                }
+
+                machineCode[currentAddress++] = opcode;
+                if (size > 1) {
+                    machineCode[currentAddress++] = operand & 0xFF; // Low byte or zero page address
+                }
+                if (size > 2) {
+                    machineCode[currentAddress++] = (operand >> 8) & 0xFF; // High byte
+                }
+            } else {
+                 // This case should ideally not be reached if Pass 1 was thorough
+                 throw new Error(`Unknown instruction/directive: ${codePart}`);
+            }
+            highestAddress = Math.max(highestAddress, currentAddress - 1); // Track highest byte written
+        } catch (e) {
+             errors.push(`[Line ${lineNumber}] Pass 2: ${e.message}`);
+             // Decide whether to continue or stop on Pass 2 errors
+        }
+    });
+
+    // ... rest of pass2 function ...
+     if (errors.length > 0) {
+        console.error("Errors found during Pass 2:");
+        errors.forEach(err => console.error(`  ${err}`));
+        // process.exit(1); // Exit if errors found in Pass 2
+    }
+
+
+    // Return only the portion of machine code that was actually used
+    return { machineCode: machineCode.slice(0, highestAddress + 1), errors };
+}
+
+// Example placeholder for evaluateExpression if not already robust
+function evaluateExpression(expression, constants, symbols, currentAddress) {
+    // Very basic example: handle hex, decimal, symbols, constants
+    expression = expression.trim();
+    if (expression.startsWith('$')) {
+        return parseInt(expression.substring(1), 16);
+    }
+    if (/^[0-9]+$/.test(expression)) {
+        return parseInt(expression, 10);
+    }
+    if (constants[expression.toUpperCase()] !== undefined) {
+        return constants[expression.toUpperCase()];
+    }
+     if (symbols[expression.toUpperCase()] !== undefined) {
+        return symbols[expression.toUpperCase()];
+    }
+    // Add more complex expression handling (e.g., LABEL+1) here if needed
+    throw new Error(`Cannot evaluate expression: ${expression}`);
+}
+
+// Example placeholder for instruction resolution functions
+function getInstructionSizeAndMode(mnemonic, operandStr) {
+    // Needs actual implementation based on CPU architecture
+    // Returns { size: number, mode: string }
+    // Example:
+    if (mnemonic === 'LDA') {
+        if (operandStr.startsWith('#')) return { size: 2, mode: 'Immediate' };
+        if (operandStr.includes(',')) return { size: 3, mode: 'Absolute,X' }; // Simplified
+        // ... other modes
+        return { size: 3, mode: 'Absolute' }; // Default guess
+    }
+     if (mnemonic === 'LDX') return { size: 2, mode: 'Immediate' };
+     if (mnemonic === 'CMP') return { size: 2, mode: 'Immediate' };
+     if (mnemonic === 'BEQ') return { size: 2, mode: 'Relative' };
+     if (mnemonic === 'STA') return { size: 3, mode: 'Absolute,X' }; // Simplified
+     if (mnemonic === 'INX') return { size: 1, mode: 'Implied' };
+     if (mnemonic === 'JMP') return { size: 3, mode: 'Absolute' };
+
+    throw new Error(`Unknown mnemonic ${mnemonic}`);
+}
+
+function resolveInstruction(mnemonic, operandStr, symbolTable, constants, currentAddress) {
+     // Needs actual implementation based on CPU architecture
+     // Returns { opcode: number, mode: string, operand: number, size: number }
+     // Example:
+     const { size, mode } = getInstructionSizeAndMode(mnemonic, operandStr); // Reuse size logic
+     let opcode = 0xA9; // Default guess (LDA Immediate)
+     let operand = 0;
+     if (operandStr) {
+         try {
+            // Remove addressing mode characters like #, (, ), X, Y for evaluation
+            const cleanOperandStr = operandStr.replace(/[#(),XY\s]/gi, '');
+            operand = evaluateExpression(cleanOperandStr, constants, symbolTable, currentAddress);
+
+            // Calculate relative offset for branches
+            if (['BEQ', 'BNE', 'BCS', 'BCC', 'BMI', 'BPL', 'BVS', 'BVC'].includes(mnemonic)) {
+                 const targetAddress = operand;
+                 const offset = targetAddress - (currentAddress + 2); // Relative offset calculation
+                 if (offset < -128 || offset > 127) {
+                     throw new Error(`Branch target out of range: ${offset}`);
+                 }
+                 operand = offset & 0xFF; // Store as 8-bit signed offset
+            }
+
+         } catch (e) {
+             throw new Error(`Error evaluating operand "${operandStr}": ${e.message}`);
+         }
+     }
+
+     // Determine actual opcode based on mnemonic and mode (lookup table needed)
+     // This is highly simplified
+     if (mnemonic === 'LDA' && mode === 'Immediate') opcode = 0xA9;
+     else if (mnemonic === 'LDA' && mode === 'Absolute,X') opcode = 0xBD;
+     else if (mnemonic === 'LDX' && mode === 'Immediate') opcode = 0xA2;
+     else if (mnemonic === 'CMP' && mode === 'Immediate') opcode = 0xC9;
+     else if (mnemonic === 'BEQ' && mode === 'Relative') opcode = 0xF0;
+     else if (mnemonic === 'STA' && mode === 'Absolute,X') opcode = 0x9D;
+     else if (mnemonic === 'INX' && mode === 'Implied') opcode = 0xE8;
+     else if (mnemonic === 'JMP' && mode === 'Absolute') opcode = 0x4C;
+     // ... many more opcodes ...
+     else {
+        // Use default or throw error if combination not found
+        // opcode = 0xEA; // Default to NOP?
+        // throw new Error(`Opcode not found for ${mnemonic} ${mode}`);
+     }
+
+
+     return { opcode, mode, operand, size };
 }

@@ -325,4 +325,180 @@ describe('CPU', () => {
         expect(cpu.registers.PC).toBe(expectedPC); // Should be 0x0102
     });
 
+    test('step() should execute JSR Absolute', () => {
+        // 0x20 0x34 0x12 is JSR $1234
+        cpu.memory.write(0x0000, 0x20); // JSR Opcode
+        cpu.memory.write(0x0001, 0x34); // Low byte of target address
+        cpu.memory.write(0x0002, 0x12); // High byte of target address
+        cpu.registers.PC = 0x0000;
+        cpu.registers.SP = 0xFF; // Initial SP
+
+        cpu.step();
+
+        // PC should jump to target
+        expect(cpu.registers.PC).toBe(0x1234);
+        // SP should decrement twice (for high and low bytes)
+        expect(cpu.registers.SP).toBe(0xFD);
+        // Return address (PC after JSR = 0x0002) should be pushed
+        // Return address = 0x0002
+        expect(cpu.memory.read(0x01FF)).toBe(0x00); // High byte pushed first
+        expect(cpu.memory.read(0x01FE)).toBe(0x02); // Low byte pushed second
+    });
+
+    test('step() should execute RTS Implied', () => {
+        // Setup stack with return address 0x1234 (pushed as 0x12 then 0x34)
+        cpu.registers.SP = 0xFD;
+        cpu.memory.write(0x01FF, 0x12); // High byte
+        cpu.memory.write(0x01FE, 0x34); // Low byte
+
+        // Place RTS instruction
+        cpu.memory.write(0x5000, 0x60); // RTS Opcode
+        cpu.registers.PC = 0x5000;
+
+        cpu.step();
+
+        // PC should be return address + 1
+        expect(cpu.registers.PC).toBe(0x1235);
+        // SP should increment twice
+        expect(cpu.registers.SP).toBe(0xFF);
+    });
+
+    test('step() should execute DEX Implied', () => {
+        cpu.memory.write(0x0000, 0xCA); // DEX Opcode
+        cpu.registers.PC = 0x0000;
+        cpu.registers.X = 0x05;
+        cpu.registers.P = 0;
+
+        cpu.step();
+
+        expect(cpu.registers.X).toBe(0x04);
+        expect(cpu.registers.PC).toBe(0x0001);
+        expect(cpu.registers.getZeroFlag()).toBe(false);
+        expect(cpu.registers.getNegativeFlag()).toBe(false);
+    });
+
+    test('step() should execute DEX Implied resulting in zero', () => {
+        cpu.memory.write(0x0000, 0xCA); // DEX Opcode
+        cpu.registers.PC = 0x0000;
+        cpu.registers.X = 0x01;
+        cpu.registers.P = 0;
+
+        cpu.step();
+
+        expect(cpu.registers.X).toBe(0x00);
+        expect(cpu.registers.PC).toBe(0x0001);
+        expect(cpu.registers.getZeroFlag()).toBe(true);
+        expect(cpu.registers.getNegativeFlag()).toBe(false);
+    });
+
+     test('step() should execute DEX Implied wrapping to negative', () => {
+        cpu.memory.write(0x0000, 0xCA); // DEX Opcode
+        cpu.registers.PC = 0x0000;
+        cpu.registers.X = 0x00;
+        cpu.registers.P = 0;
+
+        cpu.step();
+
+        expect(cpu.registers.X).toBe(0xFF); // Wraps around
+        expect(cpu.registers.PC).toBe(0x0001);
+        expect(cpu.registers.getZeroFlag()).toBe(false);
+        expect(cpu.registers.getNegativeFlag()).toBe(true); // 0xFF is negative
+    });
+
+    test('step() should execute BPL (branch taken)', () => {
+        // 0x10 0x05 is BPL +5
+        cpu.memory.write(0x0100, 0x10); // BPL Opcode
+        cpu.memory.write(0x0101, 0x05); // Relative offset +5
+        cpu.registers.PC = 0x0100;
+        cpu.registers.setNegativeFlag(false); // Ensure N=0 for branch
+
+        const expectedPC = (0x0100 + 2 + 5) & 0xFFFF; // PC after fetch + offset
+        cpu.step();
+
+        expect(cpu.registers.PC).toBe(expectedPC); // Should be 0x0107
+    });
+
+    test('step() should execute BPL (branch not taken)', () => {
+        // 0x10 0x05 is BPL +5
+        cpu.memory.write(0x0100, 0x10); // BPL Opcode
+        cpu.memory.write(0x0101, 0x05); // Relative offset +5
+        cpu.registers.PC = 0x0100;
+        cpu.registers.setNegativeFlag(true); // Ensure N=1, no branch
+
+        const expectedPC = (0x0100 + 2) & 0xFFFF; // PC after fetch only
+        cpu.step();
+
+        expect(cpu.registers.PC).toBe(expectedPC); // Should be 0x0102
+    });
+
+    test('step() should execute LDA Zero Page', () => {
+        // 0xA5 0x42 is LDA $42
+        cpu.memory.write(0x0000, 0xA5); // LDA_ZP Opcode
+        cpu.memory.write(0x0001, 0x42); // Zero Page address
+        cpu.memory.write(0x0042, 0xAB); // Value at ZP address
+        cpu.registers.PC = 0x0000;
+        cpu.registers.A = 0;
+
+        cpu.step();
+
+        expect(cpu.registers.A).toBe(0xAB);
+        expect(cpu.registers.PC).toBe(0x0002);
+        expect(cpu.registers.getNegativeFlag()).toBe(true);
+    });
+
+    test('step() should execute STA Zero Page', () => {
+        // 0x85 0x55 is STA $55
+        cpu.memory.write(0x0000, 0x85); // STA_ZP Opcode
+        cpu.memory.write(0x0001, 0x55); // Zero Page address
+        cpu.registers.PC = 0x0000;
+        cpu.registers.A = 0xCD; // Value to store
+        cpu.memory.write(0x0055, 0); // Ensure target is initially 0
+
+        cpu.step();
+
+        expect(cpu.memory.read(0x0055)).toBe(0xCD);
+        expect(cpu.registers.PC).toBe(0x0002);
+    });
+
+    test('step() should execute LDA Indirect Indexed Y', () => {
+        // 0xB1 0x30 is LDA ($30), Y
+        // ZP $30/$31 holds the base address $1234
+        // Y = $05
+        // Effective address = $1234 + $05 = $1239
+        cpu.memory.write(0x0000, 0xB1); // LDA_IND_Y Opcode
+        cpu.memory.write(0x0001, 0x30); // Zero Page address containing pointer
+        cpu.memory.write(0x0030, 0x34); // Low byte of base address ($1234)
+        cpu.memory.write(0x0031, 0x12); // High byte of base address ($1234)
+        cpu.memory.write(0x1239, 0xEF); // Value at effective address
+        cpu.registers.PC = 0x0000;
+        cpu.registers.Y = 0x05;
+        cpu.registers.A = 0;
+
+        cpu.step();
+
+        expect(cpu.registers.A).toBe(0xEF);
+        expect(cpu.registers.PC).toBe(0x0002);
+        expect(cpu.registers.getNegativeFlag()).toBe(true);
+    });
+
+     test('step() should execute STA Indirect Indexed Y', () => {
+        // 0x91 0x32 is STA ($32), Y
+        // ZP $32/$33 holds the base address $4567
+        // Y = $0A
+        // Effective address = $4567 + $0A = $4571
+        cpu.memory.write(0x0000, 0x91); // STA_IND_Y Opcode
+        cpu.memory.write(0x0001, 0x32); // Zero Page address containing pointer
+        cpu.memory.write(0x0032, 0x67); // Low byte of base address ($4567)
+        cpu.memory.write(0x0033, 0x45); // High byte of base address ($4567)
+        cpu.registers.PC = 0x0000;
+        cpu.registers.Y = 0x0A;
+        cpu.registers.A = 0xFE; // Value to store
+        cpu.memory.write(0x4571, 0); // Ensure target is initially 0
+
+        cpu.step();
+
+        expect(cpu.memory.read(0x4571)).toBe(0xFE);
+        expect(cpu.registers.PC).toBe(0x0002);
+    });
+
 });
