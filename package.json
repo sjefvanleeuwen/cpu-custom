@@ -1,0 +1,23 @@
+{
+  "name": "custom-cpu-sim",
+  "version": "1.0.0",
+  "description": "Simulation of a custom 8-bit CPU",
+  "main": "js/main.js",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "build:rom": "node scripts/build-rom.js",
+    "asm": "node scripts/assembler.js asm/hello.asm dist/hello.sys"
+  },
+  "keywords": [
+    "cpu",
+    "simulation",
+    "8-bit",
+    "emulator"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "jest": "^29.0.0"
+  },
+  "type": "module"
+}

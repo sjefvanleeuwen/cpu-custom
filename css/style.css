@@ -1,0 +1,28 @@
+body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#cpu-state {
+    border: 1px solid #ccc;
+    padding: 10px;
+    margin-bottom: 10px;
+    width: 80%;
+    max-width: 600px;
+}
+
+#registers-display, #memory-display {
+    background-color: #f0f0f0;
+    padding: 5px;
+    font-family: monospace;
+    white-space: pre-wrap; /* Allow wrapping */
+    word-wrap: break-word; /* Break long words */
+}
+
+#controls button {
+    padding: 10px 15px;
+    margin: 5px;
+    cursor: pointer;
+}
